@@ -1,0 +1,18 @@
+# --- PyTorch with MPS (Apple Silicon) ---
+# Install the whisky/py3.14-compatible wheels. For macOS arm64:
+#   pip install -r requirements.txt
+# Stable torch supports MPS on arm64. If you hit a Python 3.14 wheel gap,
+# fall back to torch nightly: pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cpu
+
+torch>=2.4.0
+torchvision>=0.19.0
+onnx>=1.16.0
+onnxruntime>=1.18.0
+
+# --- data / viz / metrics ---
+numpy>=1.26.0
+pandas>=2.1.0
+scikit-learn>=1.4.0
+Pillow>=10.0.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
