@@ -225,7 +225,7 @@ Each channel has the mean subtracted and is divided by the standard deviation.
 These specific constants are ImageNet's channel statistics. They must be used
 because the pretrained weights were calibrated against inputs in that
 distribution. **The same constants must be applied at inference**, which is why
-the webcam demo imports them from `config.py` rather than hardcoding them.
+the webcam demo imports them from `rafdb/core/config.py` rather than hardcoding them.
 
 ### Handling the imbalance
 
@@ -480,7 +480,7 @@ that set does not measure generalisation, it measures the best of 25 draws. The
 reported 79.17% was optimistically biased.
 
 **The fix.** The stratified validation split of section 3. Test is now read
-exactly once, by `evaluate.py`, after all decisions are final.
+exactly once, by `rafdb/pipeline/evaluate.py`, after all decisions are final.
 
 ### 7.2 BatchNorm was never actually frozen
 
@@ -628,7 +628,7 @@ disagree on the same pairs. Some of this error is irreducible given the labels.
 
 **This is one seed.** Fear has 74 test images, so a single flipped prediction
 moves its recall by 1.35 points. Run-to-run variation can exceed the differences
-often claimed between methods. `aggregate_seeds.py` exists to report mean and
+often claimed between methods. `rafdb/reporting/aggregate_seeds.py` exists to report mean and
 standard deviation across seeds, and any publication of these numbers should use
 it.
 
@@ -645,7 +645,7 @@ trained model is exported once and then runs anywhere with an ONNX runtime.
 The export uses opset 17, with a **dynamic batch axis** so the graph accepts any
 batch size, and runs on CPU regardless of the training device for portability.
 
-Export is only trustworthy if verified, so `export.py` does two checks:
+Export is only trustworthy if verified, so `rafdb/pipeline/export.py` does two checks:
 
 1. **Structural** — `onnx.checker` validates the graph.
 2. **Numerical** — PyTorch and onnxruntime logits are compared on batch size 1,
@@ -662,7 +662,7 @@ same model.
 
 ### The webcam demo
 
-`webcam_demo.py` runs the ONNX graph on a live camera. It deliberately **does not
+`rafdb/deploy/webcam_demo.py` runs the ONNX graph on a live camera. It deliberately **does not
 import torch**, so it exercises the real deployment artifact rather than the
 training-time model.
 
@@ -801,8 +801,8 @@ separation is Delta E 11.8 under simulated protanopia against a target of 8, and
 single-hue green ramp running light to dark, never a rainbow, because they encode
 magnitude rather than identity.
 
-Regenerate the training curves with `python plot_history.py` and the evaluation
-figures with `python evaluate.py --tta`.
+Regenerate the training curves with `python -m rafdb.reporting.plot_history` and the evaluation
+figures with `python -m rafdb.pipeline.evaluate --tta`.
 
 ### Training curves
 
@@ -864,7 +864,7 @@ show this one, because overall accuracy of 0.8611 conceals exactly this spread.
 
 ### Training-time figure
 
-**`val_confusion_best.png`** is written by `train.py` at the best epoch only, on
+**`val_confusion_best.png`** is written by `rafdb/pipeline/train.py` at the best epoch only, on
 the validation split. It is a progress check during training rather than a
 reportable result; the test-split figures above are the ones that belong in a
 writeup.
@@ -873,19 +873,25 @@ writeup.
 
 ## 10. File map
 
-| File | Role |
+| Module | Role |
 |---|---|
-| `config.py` | every path, class name and hyperparameter — one source of truth |
-| `dataset.py` | datasets, stratified split, augmentation, sampler, device selection |
-| `model.py` | ResNet-18 construction, freeze/unfreeze, BN-eval, parameter groups |
-| `train.py` | training loop, phase handling, metrics, history CSV, checkpoints |
-| `evaluate.py` | full report on a chosen split, confusion plots, metrics JSON |
-| `export.py` | ONNX export with verification against PyTorch |
-| `aggregate_seeds.py` | mean and standard deviation across seeds |
-| `plot_history.py` | training curve figure |
-| `webcam_demo.py` | live camera inference on the exported graph |
+| `rafdb/core/config.py` | every path, class name and hyperparameter — one source of truth |
+| `rafdb/core/dataset.py` | datasets, stratified split, augmentation, sampler, device selection |
+| `rafdb/core/model.py` | ResNet-18 construction, freeze/unfreeze, BN-eval, parameter groups |
+| `rafdb/pipeline/train.py` | training loop, phase handling, metrics, history CSV, checkpoints |
+| `rafdb/pipeline/evaluate.py` | full report on a chosen split, figures, metrics JSON |
+| `rafdb/pipeline/export.py` | ONNX export with verification against PyTorch |
+| `rafdb/reporting/plotstyle.py` | shared palette and figure styling |
+| `rafdb/reporting/plot_history.py` | training curves, one figure per file |
+| `rafdb/reporting/aggregate_seeds.py` | mean and standard deviation across seeds |
+| `rafdb/deploy/webcam_demo.py` | live camera inference on the exported graph |
+| `run_all.py` | runs every stage in order, with checks and a summary |
 
-Everything reads its settings from `config.py`, so the training, evaluation,
+Run a stage as a module from the project root, for example
+`python -m rafdb.pipeline.train --seed 42`, or run everything with
+`python3 run_all.py`.
+
+Everything reads its settings from `rafdb/core/config.py`, so the training, evaluation,
 export and deployment paths cannot drift apart. That is what made the
 preprocessing parity check in section 9 possible.
 
@@ -899,7 +905,7 @@ Honest assessment of where the remaining headroom is, in order of expected value
    from a face recognition network (VGGFace2, MS1M) is the single largest known
    lever in FER, typically worth several points. This is the first thing to try.
 2. **Three seeds and variance.** Required before quoting any of these numbers.
-   The machinery is already in `aggregate_seeds.py`.
+   The machinery is already in `rafdb/reporting/aggregate_seeds.py`.
 3. **The rare classes.** Fear and Disgust are still near 55%. Options include
    focal loss, targeted augmentation, or simply more Fear data from a compatible
    dataset such as AffectNet.

@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 
-import config as C
+from rafdb.core import config as C
 
 # --------------------------------------------------------------------------
 # Drawing constants. BGR, because OpenCV.

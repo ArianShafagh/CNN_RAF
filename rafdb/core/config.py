@@ -8,7 +8,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-ROOT = Path(__file__).resolve().parent
+# This file lives at rafdb/core/config.py, so the project root — where
+# Dataset/, outputs/, checkpoints/ and models/ sit — is three levels up.
+ROOT = Path(__file__).resolve().parents[2]
 # Dataset mirrors RAF-DB Basic, already in ImageFolder layout:
 #   Dataset/DATASET/train/<1..7>/*.jpg   Dataset/DATASET/test/<1..7>/*.jpg
 DATA_ROOT = ROOT / "Dataset" / "DATASET"

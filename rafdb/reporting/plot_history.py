@@ -19,8 +19,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-import config as C
-import plotstyle as S
+from rafdb.core import config as C
+from rafdb.reporting import plotstyle as S
 
 
 def read_history(path: Path) -> list[dict]:

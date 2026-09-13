@@ -19,7 +19,7 @@ import torch
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from torchvision import datasets, transforms
 
-import config as C
+from rafdb.core import config as C
 
 
 # ---------------------------------------------------------------------------

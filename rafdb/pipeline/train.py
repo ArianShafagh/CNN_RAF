@@ -36,9 +36,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import config as C
-import dataset as D
-import model as M
+from rafdb.core import config as C
+from rafdb.core import dataset as D
+from rafdb.core import model as M
 
 # sklearn for the per-epoch metrics + confusion matrix — CPU numpy arrays.
 from sklearn.metrics import (

@@ -28,9 +28,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import config as C
-import dataset as D
-from evaluate import load_checkpoint
+from rafdb.core import config as C
+from rafdb.core import dataset as D
+from rafdb.pipeline.evaluate import load_checkpoint
 
 import onnx
 import onnxruntime as ort

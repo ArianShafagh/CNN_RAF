@@ -14,7 +14,7 @@ PyTorch with onnxruntime, and a live webcam demo driven by the exported graph.
 
 RAF-DB Basic ships only `train` and `test`. A stratified **10% validation split
 is held out of `train`** and is the only thing checkpoint selection ever sees.
-The official test partition is scored once, by `evaluate.py`, at the end. This
+The official test partition is scored once, by `rafdb/pipeline/evaluate.py`, at the end. This
 matters: selecting the best of N epochs on the test set and then reporting that
 same set inflates the number.
 
@@ -40,12 +40,12 @@ Figures include horizontal-flip test-time augmentation (`--tta`), worth about
 
 > **Caveat for reporting:** this is one seed. Fear has only 74 test images, so a
 > single flipped prediction moves its recall by 1.35 points. Run three seeds and
-> use `aggregate_seeds.py` before quoting these numbers in a paper:
+> use `rafdb/reporting/aggregate_seeds.py` before quoting these numbers in a paper:
 > ```bash
 > for s in 42 43 44; do
->   python train.py --seed $s --tag seed$s && python evaluate.py --tag seed$s
+>   python -m rafdb.pipeline.train --seed $s --tag seed$s && python -m rafdb.pipeline.evaluate --tag seed$s
 > done
-> python aggregate_seeds.py
+> python -m rafdb.reporting.aggregate_seeds
 > ```
 
 ## Classes
@@ -61,16 +61,33 @@ Fear and Disgust are the rare classes the rebalancing targets.
 ## Project layout
 
 ```
-config.py           # paths, class mapping, all hyperparameters (single source of truth)
-dataset.py          # datasets, stratified val split, augmentation, weighted sampler, device
-model.py            # ResNet-18 + fresh 7-class head, freeze/unfreeze, BN-eval, param groups
-train.py            # fine-tuning loop, per-epoch metrics, history CSV, checkpointing
-evaluate.py         # full report on a chosen split + confusion plots + JSON
-export.py           # ONNX export with dynamic batch axis + onnxruntime verification
-aggregate_seeds.py  # mean +/- std across seeds, for reporting
-webcam_demo.py      # live camera inference on the exported ONNX graph
+run_all.py                    # one command to run the whole pipeline
 requirements.txt
+README.md
+
+rafdb/                        # the Python package
+├── core/                     # shared foundation, imported by everything else
+│   ├── config.py             #   paths, class mapping, all hyperparameters
+│   ├── dataset.py            #   datasets, stratified val split, augmentation, sampler
+│   └── model.py              #   ResNet-18 + fresh head, freeze/unfreeze, param groups
+├── pipeline/                 # the stages that produce a model
+│   ├── train.py              #   fine-tuning loop, metrics, history CSV, checkpoints
+│   ├── evaluate.py           #   report on a chosen split + figures + metrics JSON
+│   └── export.py             #   ONNX export + verification against PyTorch
+├── reporting/                # figures and statistics for writing up
+│   ├── plotstyle.py          #   shared palette and matplotlib styling
+│   ├── plot_history.py       #   training curves, one figure per file
+│   └── aggregate_seeds.py    #   mean +/- std across seeds
+└── deploy/                   # running the model outside training
+    └── webcam_demo.py        #   live camera inference, ONNX only, no torch
+
+docs/                         # LEARNING.md, architecture.drawio
+models/                       # blaze_face_short_range.tflite
+Dataset/  checkpoints/  outputs/
 ```
+
+Stages are run as modules from the project root, for example
+`python -m rafdb.pipeline.train`. `run_all.py` does this for you.
 
 ## Dataset
 
@@ -82,7 +99,7 @@ Dataset/DATASET/test/<1..7>/*.jpg
 ```
 
 The **test** split is used as the validation set during training (RAF-DB Basic
-has no separate val partition). Paths are defined in [config.py](config.py) —
+has no separate val partition). Paths are defined in [config.py](rafdb/core/config.py) —
 edit `DATA_ROOT` there if your data lives elsewhere.
 
 ## Setup
@@ -99,19 +116,44 @@ pip install -r requirements.txt
 Quick sanity check that the data and device are wired up correctly:
 
 ```bash
-python dataset.py                 # prints sample counts, class mapping, a batch shape
-python model.py                   # prints param counts + a forward-pass output shape
+python -m rafdb.core.dataset                 # prints sample counts, class mapping, a batch shape
+python -m rafdb.core.model                   # prints param counts + a forward-pass output shape
 ```
 
 ## Usage
 
-Run the three steps in order. Each script reads all its settings from
-[config.py](config.py).
+### Run everything at once
+
+```bash
+python3 run_all.py
+```
+
+One command for the whole pipeline: environment and dataset checks, training,
+evaluation with and without test-time augmentation, figures, and ONNX export.
+It prints a per-stage timing breakdown and a result summary at the end.
+
+It uses `venv/bin/python` for every stage even when launched with the system
+`python3`, so activating the virtualenv first is optional.
+
+```bash
+python3 run_all.py --list             # show the stages
+python3 run_all.py --skip train       # reuse the existing checkpoint
+python3 run_all.py --only figures     # just redraw the plots
+python3 run_all.py --force-train      # retrain even if a checkpoint exists
+python3 run_all.py --seeds 42 43 44   # three seeds, then aggregate
+```
+
+Training is skipped automatically when a checkpoint already exists, so a repeat
+run will not silently burn hours. Use `--force-train` to override.
+
+### Or run each step yourself
+
+Each script reads all its settings from [config.py](rafdb/core/config.py).
 
 ### 1. Train
 
 ```bash
-python train.py
+python -m rafdb.pipeline.train
 ```
 
 - **Phase 1** (`PHASE1_EPOCHS=3`): backbone frozen — its learning rates are held
@@ -135,10 +177,10 @@ Writes:
 ### 2. Evaluate
 
 ```bash
-python evaluate.py                # best_model.pth on the held-out test split
-python evaluate.py --tta          # + horizontal-flip test-time augmentation
-python evaluate.py --split val    # score the validation split instead
-python evaluate.py --last         # uses last_model.pth instead
+python -m rafdb.pipeline.evaluate                # best_model.pth on the held-out test split
+python -m rafdb.pipeline.evaluate --tta          # + horizontal-flip test-time augmentation
+python -m rafdb.pipeline.evaluate --split val    # score the validation split instead
+python -m rafdb.pipeline.evaluate --last         # uses last_model.pth instead
 ```
 
 Prints and saves a detailed report: overall/balanced accuracy, macro & weighted
@@ -150,9 +192,9 @@ glance. Artifacts land in `outputs/`: `eval_report.txt`, `eval_metrics.json`,
 ### 3. Export to ONNX
 
 ```bash
-python export.py                  # exports best_model.pth
-python export.py --last           # exports last_model.pth
-python export.py --opset 18       # override ONNX opset (default 17)
+python -m rafdb.pipeline.export                  # exports best_model.pth
+python -m rafdb.pipeline.export --last           # exports last_model.pth
+python -m rafdb.pipeline.export --opset 18       # override ONNX opset (default 17)
 ```
 
 Exports the model to `outputs/raf_resnet18.onnx` with a **dynamic batch axis**
@@ -171,16 +213,16 @@ mkdir -p models && curl -L -o models/blaze_face_short_range.tflite \
 ```
 
 ```bash
-python webcam_demo.py                  # opens the camera, labels your face live
-python webcam_demo.py --image face.jpg # one still image, no camera needed
-python webcam_demo.py --detector haar  # fall back if mediapipe is unavailable
-python webcam_demo.py --no-align       # raw box crop instead of eye alignment
+python -m rafdb.deploy.webcam_demo                  # opens the camera, labels your face live
+python -m rafdb.deploy.webcam_demo --image face.jpg # one still image, no camera needed
+python -m rafdb.deploy.webcam_demo --detector haar  # fall back if mediapipe is unavailable
+python -m rafdb.deploy.webcam_demo --no-align       # raw box crop instead of eye alignment
 ```
 
 Runs the exported ONNX graph through `onnxruntime` — no torch import — so it
 tests the deployment artifact rather than the training-time model. Preprocessing
 matches `dataset.eval_transforms` exactly: scoring the whole test split through
-this path reproduces `evaluate.py` to within 0.06 points, the residual being PIL
+this path reproduces `rafdb/pipeline/evaluate.py` to within 0.06 points, the residual being PIL
 vs OpenCV resize interpolation.
 
 **Face alignment.** RAF-DB ships landmark-aligned crops — measured over 400
@@ -221,10 +263,10 @@ in lighting, pose and framing, and Fear and Disgust are the weakest classes.
 
 ```bash
 for s in 42 43 44; do
-  python train.py    --seed $s --tag seed$s
-  python evaluate.py --tag seed$s
+  python -m rafdb.pipeline.train    --seed $s --tag seed$s
+  python -m rafdb.pipeline.evaluate --tag seed$s
 done
-python aggregate_seeds.py
+python -m rafdb.reporting.aggregate_seeds
 ```
 
 One run is not a result: Fear has only 74 test images, so a single flipped
@@ -232,7 +274,7 @@ prediction moves its recall by 1.35 points. Report mean ± std over seeds.
 
 ## Tuning
 
-All hyperparameters live in [config.py](config.py): image size, batch size,
+All hyperparameters live in [config.py](rafdb/core/config.py): image size, batch size,
 epochs per phase, learning rates, weight decay, label smoothing, warmup, and the
 random seed. Change them there — every script picks the values up automatically.
 
@@ -247,7 +289,7 @@ random seed. Change them there — every script picks the values up automaticall
 - Augmentation is deliberately gentle because RAF-DB ships pre-aligned crops:
   `RandomResizedCrop` for scale jitter, 8-degree rotation, no hue jitter.
 - `opencv-python` is pinned below 5.0 — OpenCV 5 removed the bundled Haar
-  cascade XML files that `webcam_demo.py` relies on.
-- `export.py` pins the legacy TorchScript exporter (`dynamo=False`) so it works
+  cascade XML files that `rafdb/deploy/webcam_demo.py` relies on.
+- `rafdb/pipeline/export.py` pins the legacy TorchScript exporter (`dynamo=False`) so it works
   without the extra `onnxscript` dependency. To use the newer torch.export-based
   exporter instead, `pip install onnxscript` and drop that flag.

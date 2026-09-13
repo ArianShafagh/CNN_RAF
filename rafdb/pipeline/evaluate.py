@@ -37,9 +37,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import config as C
-import dataset as D
-import model as M
+from rafdb.core import config as C
+from rafdb.core import dataset as D
+from rafdb.core import model as M
 
 from sklearn.metrics import (
     accuracy_score,
@@ -363,7 +363,7 @@ def save_eval_plots(m, out_dir: Path, variant: str) -> list:
     try:
         import matplotlib.pyplot as plt
         import numpy as _np
-        import plotstyle as S
+        from rafdb.reporting import plotstyle as S
     except Exception as exc:  # pragma: no cover
         print(f"(skipping plots: {exc})")
         return []

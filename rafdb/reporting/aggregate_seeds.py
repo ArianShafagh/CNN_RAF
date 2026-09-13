@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-import config as C
+from rafdb.core import config as C
 
 OVERALL_KEYS = [
     ("accuracy", "accuracy"),
