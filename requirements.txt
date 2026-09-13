@@ -9,6 +9,20 @@ torchvision>=0.19.0
 onnx>=1.16.0
 onnxruntime>=1.18.0
 
+# --- live webcam demo ---
+# Pinned below 5.0: OpenCV 5 removed the bundled Haar cascade XML files used by
+# the --detector haar fallback.
+opencv-python>=4.9.0,<5.0.0
+
+# Face detection for the webcam demo (BlazeFace short range).
+# Pinned to 0.10.x: mediapipe 1.0.1 aborts on macOS arm64 inside
+# TensorsToDetectionsCalculator ("Check failed: service_ Service is unavailable").
+# Install with --no-deps, because its dependency on opencv-contrib-python 5.x
+# would replace the opencv-python 4.x pinned above and delete the cascades:
+#     pip install --no-deps 'mediapipe==0.10.35'
+#     pip install absl-py sounddevice cffi pycparser certifi
+mediapipe==0.10.35
+
 # --- data / viz / metrics ---
 numpy>=1.26.0
 pandas>=2.1.0

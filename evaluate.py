@@ -14,11 +14,19 @@ the model, and surfaces performance across many views:
 Artifacts written to outputs/:
   - eval_report.txt   : the full printed report
   - eval_metrics.json : machine-readable metrics
-  - eval_confusion.png: raw + normalised confusion matrices, per-class panel
+  - fig_confusion_raw.png, fig_confusion_normalised.png,
+    fig_per_class_recall.png  : one figure per view, never combined
+
+This runs on the OFFICIAL TEST PARTITION, which training never reads: the
+checkpoint was selected on a validation split held out of the train directory.
+The number printed here is therefore a clean held-out result, not a figure that
+was selected on.
 
 Run:
     python evaluate.py            # uses best_model.pth
     python evaluate.py --last     # use last_model.pth instead
+    python evaluate.py --tta      # average logits over the image and its mirror
+    python evaluate.py --split val # score the validation split instead
 """
 from __future__ import annotations
 
@@ -140,16 +148,24 @@ def print_model_details(model: torch.nn.Module, ckpt_meta: dict, device, file=No
 # Prediction + metric computation
 # ---------------------------------------------------------------------------
 @torch.no_grad()
-def collect_predictions(model, loader, device):
+def collect_predictions(model, loader, device, tta: bool = False):
     """Return (y_true, y_pred, y_prob) over `loader`.
 
     y_prob is the per-sample softmax (for the calibration glance).
+
+    With `tta`, logits are averaged over each image and its horizontal mirror.
+    Facial expression is near-symmetric, so the mirror is a genuine second view
+    of the same expression rather than a different input, and averaging the two
+    cancels some of the left/right asymmetry the model picked up from training
+    flips. Costs one extra forward pass.
     """
     model.eval()
     ys_true, ys_pred, ys_prob = [], [], []
     for images, labels in loader:
         images = images.to(device, non_blocking=True)
         logits = model(images)
+        if tta:
+            logits = (logits + model(torch.flip(images, dims=[3]))) / 2.0
         prob = torch.softmax(logits, dim=1)
         ys_pred.extend(logits.argmax(dim=1).cpu().numpy().tolist())
         ys_prob.extend(prob.cpu().numpy().tolist())
@@ -331,70 +347,111 @@ def print_calibration(m, file=None):
 # ---------------------------------------------------------------------------
 # Multi-panel plot saved to outputs/
 # ---------------------------------------------------------------------------
-def save_eval_plot(m, path: Path):
-    """One figure: raw confusion, normalised confusion, per-class accuracy bar.
+def save_eval_plots(m, out_dir: Path, variant: str) -> list:
+    """Write each view as its own figure.
 
-    matplotlib/seaborn imported lazily; failure is non-fatal (we still print).
+    Three separate files rather than one three-panel image: each answers a
+    different question and each needs its own caption in a report.
+
+      fig_confusion_raw          how many images landed in each cell
+      fig_confusion_normalised   what share of each true class went where
+      fig_per_class_recall       which emotions the model actually finds
+
+    matplotlib is imported lazily; failure is non-fatal (the text report still
+    prints).
     """
     try:
-        import matplotlib
-        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        import seaborn as sns
+        import numpy as _np
+        import plotstyle as S
     except Exception as exc:  # pragma: no cover
-        print(f"(skipping eval plot: {exc})")
-        return
+        print(f"(skipping plots: {exc})")
+        return []
+    S.apply_style()
     names = C.EMOTION_NAMES
+    written = []
 
-    fig, axes = plt.subplots(1, 3, figsize=(21, 6))
+    def _heatmap(ax, data, fmt, vmax, cbar_label):
+        """Sequential single hue, light to dark. Cell text takes an ink colour
+        on light cells and a light colour on dark ones, never the series hue."""
+        im = ax.imshow(data, cmap=S.GREEN_RAMP, vmin=0, vmax=vmax, aspect="equal")
+        ax.set_xticks(range(len(names)), names, rotation=40, ha="right")
+        ax.set_yticks(range(len(names)), names)
+        ax.set_xlabel("predicted")
+        ax.set_ylabel("true")
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        ax.tick_params(length=0)
+        # 2px surface gap between cells, per the mark spec.
+        ax.set_xticks(_np.arange(-.5, len(names), 1), minor=True)
+        ax.set_yticks(_np.arange(-.5, len(names), 1), minor=True)
+        ax.grid(which="minor", color=S.SURFACE, linewidth=2)
+        ax.grid(which="major", visible=False)
+        for i in range(len(names)):
+            for j in range(len(names)):
+                v = data[i, j]
+                ax.text(j, i, format(v, fmt), ha="center", va="center",
+                        fontsize=8.5,
+                        color="#FFFFFF" if v > vmax * 0.55 else S.INK)
+        cb = ax.figure.colorbar(im, ax=ax, fraction=0.045, pad=0.03)
+        cb.set_label(cbar_label, color=S.MUTED, fontsize=9)
+        cb.ax.tick_params(labelsize=8, length=0, colors=S.MUTED)
+        cb.outline.set_visible(False)
 
-    # Panel 1: raw counts
-    sns.heatmap(m["confusion"], annot=True, fmt="d", cmap="Blues",
-                xticklabels=names, yticklabels=names,
-                cbar_kws={"label": "count"}, ax=axes[0])
-    axes[0].set_title("Confusion matrix (raw)")
-    axes[0].set_xlabel("Predicted"); axes[0].set_ylabel("True")
+    # --- 1. raw counts ----------------------------------------------------
+    fig, ax = plt.subplots(figsize=(6.6, 5.6))
+    cm = m["confusion"]
+    _heatmap(ax, cm, "d", float(cm.max()), "images")
+    written.append(S.save(fig, out_dir / f"fig_confusion_raw{variant}.png",
+                          "the diagonal is correct; every other cell is one kind of mistake"))
 
-    # Panel 2: row-normalised (% of each true class)
-    sns.heatmap(m["confusion_norm"] * 100, annot=True, fmt=".1f",
-                cmap="Blues", vmin=0, vmax=100,
-                xticklabels=names, yticklabels=names,
-                cbar_kws={"label": "% of true class"}, ax=axes[1])
-    axes[1].set_title("Confusion matrix (row-normalised)")
-    axes[1].set_xlabel("Predicted"); axes[1].set_ylabel("True")
+    # --- 2. row-normalised ------------------------------------------------
+    fig, ax = plt.subplots(figsize=(6.6, 5.6))
+    _heatmap(ax, m["confusion_norm"] * 100, ".1f", 100.0, "% of true class")
+    written.append(S.save(fig, out_dir / f"fig_confusion_normalised{variant}.png",
+                          "rows sum to 100%, so classes of very different size are comparable"))
 
-    # Panel 3: per-class accuracy (recall)
+    # --- 3. per-class recall ---------------------------------------------
+    fig, ax = plt.subplots(figsize=(6.6, 4.0))
     accs = m["y_acc"] * 100
-    colors = ["#c0392b" if i in RARE_CLASSES else "#2e86c1"
-              for i in range(C.NUM_CLASSES)]
-    bars = axes[2].bar(names, accs, color=colors)
-    axes[2].set_ylim(0, 100)
-    axes[2].set_ylabel("Recall (%)")
-    axes[2].set_title("Per-class accuracy (red = rare)")
-    axes[2].tick_params(axis="x", rotation=30)
-    for bar, acc in zip(bars, accs):
-        axes[2].text(bar.get_x() + bar.get_width() / 2, acc + 1,
-                     f"{acc:.1f}", ha="center", va="bottom", fontsize=9)
-
-    plt.suptitle(
-        f"RAF-DB ResNet-18 | acc {m['accuracy']:.3f} | "
-        f"macroF1 {m['macro_f1']:.3f} | balanced {m['balanced_accuracy']:.3f}",
-        fontsize=14,
-    )
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
-    fig.savefig(path, dpi=140)
-    plt.close(fig)
+    order = _np.argsort(accs)[::-1]
+    lbls = [names[i] for i in order]
+    vals = [accs[i] for i in order]
+    colors = [S.ALERT if i in RARE_CLASSES else S.ACCENT for i in order]
+    bars = ax.bar(lbls, vals, color=colors, width=0.68)
+    for b in bars:
+        b.set_linewidth(0)
+    ax.axhline(float(accs.mean()), ls="--", lw=1, color=S.MUTED, zorder=1)
+    ax.annotate(f"balanced accuracy {accs.mean():.1f}%",
+                xy=(len(lbls) - 0.5, accs.mean()), xytext=(0, 6),
+                textcoords="offset points", ha="right", fontsize=8.5, color=S.MUTED)
+    for b, v in zip(bars, vals):
+        # A surface-coloured bbox so the balanced-accuracy rule cannot strike
+        # through a value that happens to sit at the same height.
+        ax.text(b.get_x() + b.get_width() / 2, v + 1.5, f"{v:.1f}",
+                ha="center", va="bottom", fontsize=9, color=S.INK, zorder=6,
+                bbox=dict(facecolor=S.SURFACE, edgecolor="none", pad=1.5))
+    ax.set_ylim(0, 105)
+    ax.set_ylabel("recall (%)")
+    ax.grid(axis="y")
+    ax.set_axisbelow(True)
+    ax.tick_params(axis="x", length=0)
+    rare = ", ".join(names[i] for i in RARE_CLASSES)
+    written.append(S.save(fig, out_dir / f"fig_per_class_recall{variant}.png",
+                          f"orange marks the rare classes ({rare}); labels carry the value, not colour alone"))
+    return written
 
 
 # ---------------------------------------------------------------------------
 # JSON export
 # ---------------------------------------------------------------------------
-def save_metrics_json(m, ckpt_meta, path: Path):
+def save_metrics_json(m, ckpt_meta, path: Path, split: str = 'test', tta: bool = False):
     """Drop non-serialisable numpy arrays; keep the numbers + array lists."""
     cm = m["confusion"]
     cm_norm = m["confusion_norm"]
     payload = {
         "checkpoint_epoch": ckpt_meta.get("epoch"),
+        "seed": ckpt_meta.get("config", {}).get("seed"),
         "overall": {
             "accuracy": float(m["accuracy"]),
             "balanced_accuracy": float(m["balanced_accuracy"]),
@@ -414,6 +471,8 @@ def save_metrics_json(m, ckpt_meta, path: Path):
         "confusion_matrix": cm.tolist(),
         "confusion_matrix_rownorm": cm_norm.tolist(),
         "rare_classes": [C.EMOTION_NAMES[i] for i in RARE_CLASSES],
+        "split": split,
+        "tta": tta,
     }
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)
@@ -426,23 +485,30 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate RAF-DB ResNet-18")
     parser.add_argument("--last", action="store_true",
                         help="use last_model.pth instead of best_model.pth")
+    parser.add_argument("--tta", action="store_true",
+                        help="horizontal-flip test-time augmentation")
+    parser.add_argument("--split", choices=["test", "val"], default="test",
+                        help="which split to score (default: test)")
+    parser.add_argument("--tag", type=str, default="",
+                        help="checkpoint/artifact suffix, matching train.py --tag")
     args = parser.parse_args()
 
+    suffix = f"_{args.tag}" if args.tag else ""
     device = D.select_device()
-    ckpt_path = C.LAST_CKPT if args.last else C.BEST_CKPT
+    name = "last_model" if args.last else "best_model"
+    ckpt_path = C.CKPT_DIR / f"{name}{suffix}.pth"
 
     model, ckpt_meta = load_checkpoint(ckpt_path, device)
     ckpt_meta["_source"] = str(ckpt_path)
 
-    # Eval transform (no augmentation) on the official test split.
-    _, val_ds = D.build_datasets()
-    val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=C.BATCH_SIZE, shuffle=False,
-        num_workers=C.NUM_WORKERS,
-        persistent_workers=(C.NUM_WORKERS > 0),
-    )
+    # Deterministic, augmentation-free transforms on the requested split.
+    _, val_ds, test_ds = D.build_datasets()
+    ds = test_ds if args.split == "test" else val_ds
+    loader = D.eval_loader(ds, device)
+    print(f"scoring the {args.split} split: {len(ds)} images"
+          + ("  [flip TTA]" if args.tta else ""))
 
-    y_true, y_pred, y_prob = collect_predictions(model, val_loader, device)
+    y_true, y_pred, y_prob = collect_predictions(model, loader, device, tta=args.tta)
     m = compute_metrics(y_true, y_pred, y_prob)
 
     # ---- everything to stdout ----
@@ -459,9 +525,9 @@ def main():
     print("=" * 70)
 
     # ---- persist artifacts ----
-    report_txt = C.OUT_DIR / "eval_report.txt"
-    plot_png = C.OUT_DIR / "eval_confusion.png"
-    metrics_json = C.OUT_DIR / "eval_metrics.json"
+    variant = f"{suffix}_{args.split}" + ("_tta" if args.tta else "")
+    report_txt = C.OUT_DIR / f"eval_report{variant}.txt"
+    metrics_json = C.OUT_DIR / f"eval_metrics{variant}.json"
 
     with open(report_txt, "w") as f:
         print_model_details(model, ckpt_meta, device, file=f)
@@ -472,13 +538,14 @@ def main():
         print_top_confusions(m, file=f)
         print_rare_focus(m, file=f)
         print_calibration(m, file=f)
-    save_eval_plot(m, plot_png)
-    save_metrics_json(m, ckpt_meta, metrics_json)
+    figures = save_eval_plots(m, C.OUT_DIR, variant)
+    save_metrics_json(m, ckpt_meta, metrics_json, args.split, args.tta)
 
     print(f"\nartifacts:")
     print(f"  {report_txt}")
-    print(f"  {plot_png}")
     print(f"  {metrics_json}")
+    for fpath in figures:
+        print(f"  {fpath}")
 
 
 if __name__ == "__main__":

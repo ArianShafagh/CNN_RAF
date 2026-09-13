@@ -120,11 +120,11 @@ def _real_test_batch(n: int) -> torch.Tensor | None:
     """Return a stacked tensor of up to `n` real test images, or None if the
     test set can't be loaded (verification still proceeds on synthetic inputs)."""
     try:
-        _, val_ds = D.build_datasets()
+        *_, test_ds = D.build_datasets()
     except Exception as exc:  # pragma: no cover - dataset is optional here
         print(f"  (skipping real-image case: {exc})")
         return None
-    imgs = [val_ds[i][0] for i in range(min(n, len(val_ds)))]
+    imgs = [test_ds[i][0] for i in range(min(n, len(test_ds)))]
     return torch.stack(imgs) if imgs else None
 
 

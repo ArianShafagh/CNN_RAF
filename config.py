@@ -23,6 +23,7 @@ OUT_DIR.mkdir(exist_ok=True)
 BEST_CKPT = CKPT_DIR / "best_model.pth"
 LAST_CKPT = CKPT_DIR / "last_model.pth"
 ONNX_PATH = OUT_DIR / "raf_resnet18.onnx"
+HISTORY_CSV = OUT_DIR / "history.csv"   # per-epoch training curve
 
 # ---------------------------------------------------------------------------
 # RAF-DB Basic 7-class mapping
@@ -52,16 +53,50 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 BATCH_SIZE = 64
 NUM_WORKERS = 4        # safe default on M-series; tune up if you have headroom
 
-# Two-phase fine-tuning
-PHASE1_EPOCHS = 5      # frozen backbone, train new head only
-PHASE2_EPOCHS = 20     # unfreeze, end-to-end at lower LR
+# ---------------------------------------------------------------------------
+# Validation split
+# ---------------------------------------------------------------------------
+# RAF-DB Basic ships only train/test. Carving a validation slice out of *train*
+# keeps the official test partition untouched until the final evaluation, so the
+# reported test number is not contaminated by checkpoint selection.
+VAL_FRACTION = 0.10
+# Deliberately separate from SEED: the split must stay identical across seeded
+# runs, otherwise multi-seed results are not comparable.
+SPLIT_SEED = 1234
+
+# Two-phase fine-tuning. One optimizer and one cosine schedule span both
+# phases; "phase 1" simply holds the backbone groups at lr=0 while the fresh
+# head settles, which avoids the momentum reset a second optimizer would cause.
+PHASE1_EPOCHS = 3      # frozen backbone, train new head only
+PHASE2_EPOCHS = 27     # unfreeze, end-to-end
 TOTAL_EPOCHS = PHASE1_EPOCHS + PHASE2_EPOCHS
 
-PHASE1_LR = 1e-3       # head only -> can afford a larger LR
-PHASE2_LR = 1e-4       # full fine-tune -> smaller to protect features
+HEAD_LR = 1e-3         # peak LR for the new fc head
 WEIGHT_DECAY = 1e-4
 LABEL_SMOOTHING = 0.1  # tolerates RAF-DB label noise/ambiguity
-WARMUP_EPOCHS = 2      # linear warmup at the start of phase 1
+WARMUP_EPOCHS = 2      # linear warmup at the very start
+
+# Layer-wise LR multipliers applied to HEAD_LR. Early ImageNet features are
+# generic and need barely any adjustment; later blocks are task-specific.
+LAYER_LR_MULTS = {
+    "stem":   0.1,     # conv1 + bn1
+    "layer1": 0.1,
+    "layer2": 0.2,
+    "layer3": 0.4,
+    "layer4": 0.6,
+    "fc":     1.0,
+}
+
+# ---------------------------------------------------------------------------
+# Class-imbalance strength
+# ---------------------------------------------------------------------------
+# Sampler weight = 1 / count**IMBALANCE_POWER.
+#   1.0 = full inverse frequency (Fear sampled ~17x Happiness) — overcorrects,
+#         and measurably cost majority-class accuracy in the first run.
+#   0.5 = square-root inverse frequency — keeps a real boost for the rare
+#         classes without distorting the majority.
+#   0.0 = no rebalancing at all.
+IMBALANCE_POWER = 0.5
 
 # Reproducibility
 SEED = 42
